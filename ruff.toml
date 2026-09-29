@@ -1,0 +1,56 @@
+# ruff.toml - Professionelle Konfiguration für Spotify Tracker
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[lint]
+# Erweiterte Regelauswahl für maximale Code-Qualität
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort (Import-Sortierung)
+    "UP",   # pyupgrade (Modernes Python)
+    "B",    # flake8-bugbear (Logik-Fehler)
+    "C4",   # flake8-comprehensions (Optimierte Loops)
+    "SIM",  # flake8-simplify (Code-Vereinfachung)
+    "D",    # pydocstyle (Dokumentation) 📚
+    "N",    # pep8-naming (Namenskonventionen)
+    "PTH",  # flake8-use-pathlib (Pathlib statt os.path) 📂
+    "ARG",  # flake8-unused-arguments
+    "RUF",  # Ruff-spezifische Regeln
+]
+
+ignore = [
+    "E501", # Zeilenlänge (macht der Formatter)
+    "D100", # Docstring in Modul-Anfang
+    "D104", # Docstring in __init__.py
+    "D107", # Docstring in __init__ Methoden
+    "G004", # Erlaubt f-strings in Logs (viel schöner!) 📝
+    "S101", # Erlaubt asserts (wichtig für einfaches Debugging)
+    "COM812", # Vermeidet Konflikte mit dem Formatter
+    "ISC001", # Vermeidet Konflikte mit dem Formatter
+    "TRY003", # Erlaubt längere Fehlermeldungen in Exceptions
+]
+
+# Automatische Korrekturen erlauben
+fixable = ["ALL"]
+unfixable = []
+
+[lint.per-file-ignores]
+# Der SIGTERM-Handler wird bewusst VOR den schweren Imports registriert,
+# damit ein Stop während der Import-Phase bereits sauber durchläuft.
+"src/spotify_db/spotify/tracker.py" = ["E402"]
+
+[lint.isort]
+# Eigenes Paket bei der Import-Sortierung als First-Party erkennen
+known-first-party = ["spotify_db"]
+
+[lint.pydocstyle]
+# Verwende den Google-Stil für Docstrings (sehr verbreitet in Profi-Projekten)
+convention = "google"
+
+[format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

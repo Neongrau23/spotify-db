@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Packaging-Artefakte (entstehen bei pip install -e .)
+*.egg-info/
+build/
+dist/
+
+# Secrets
+.env
+
+# Project Specific
+data/
+# Gerätespezifisch (Hosts, Pfade) — Vorlage: config.example.json
+config.json
+tracks.csv
+*.lock
+# Lockfile der Abhängigkeiten gehört ins Repo (reproduzierbare Installation)
+!uv.lock
+*.log
+*.db
+*.db-wal
+*.db-shm
+
+# IDEs
+.vscode/
+.idea/
+.directory

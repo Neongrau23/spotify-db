@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotify-db"
+version = "1.0.0"
+description = "Spotify-Hörverlauf-Tracker mit lokaler HTTP-API"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn>=0.30",
+    "spotipy==2.26.0",
+    "python-dotenv==1.2.2",
+]
+
+[project.scripts]
+spotify-db = "spotify_db.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

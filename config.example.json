@@ -1,0 +1,10 @@
+{
+  "remote_backup": {
+    "enabled": false,
+    "host": "192.0.2.10",
+    "user": "backup",
+    "port": 22,
+    "dest": "/srv/backups/spotify-db",
+    "identity_file": ""
+  }
+}
