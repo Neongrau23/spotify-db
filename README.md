@@ -1,5 +1,10 @@
 # spotify-db
 
+![version](https://img.shields.io/badge/version-1.0.0-blue)
+![python](https://img.shields.io/badge/python-3.12+-blue)
+![platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Android-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-green)
+
 Spotify-Hörverlauf-Tracker. Ein Hintergrundprozess pollt den gerade laufenden Song über die
 Spotify Web API und speichert Tracks, Wiedergabe-Verlauf und Hörzeit in einer lokalen
 SQLite-Datenbank. Eine API-Key-geschützte REST-API (FastAPI) stellt die Daten im Heimnetz
