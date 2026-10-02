@@ -1,6 +1,8 @@
 """Spotify Tracker Manager — einheitlicher CLI-Einstiegspunkt.
 
-Startet und stoppt Tracker, API- und Web-Server als unabhängige Subprozesse.
+Startet und stoppt Tracker, API- und Web-Server als unabhängige Subprozesse. Die
+Auswertungs-Befehle (`stats`, `top`, `history`) werden hier nur registriert und
+weitergereicht; ihre Logik liegt in `spotify_db.cli.stats`.
 
 Beispiele (alternativ: python -m spotify_db …):
   spotify-db --run                   # Tracker + API + Web-Server starten
@@ -10,6 +12,9 @@ Beispiele (alternativ: python -m spotify_db …):
   spotify-db --stop                  # alles stoppen
   spotify-db --stop --api            # nur API stoppen
   spotify-db --status                # Status aller drei Prozesse anzeigen
+  spotify-db stats --period month    # Statistik dieses Monats
+  spotify-db top artists -n 5        # Top 5 Artists (gesamt)
+  spotify-db history                 # letzte 20 Wiedergaben
 """
 
 import argparse
@@ -21,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+from spotify_db.cli import stats as stats_cli
 from spotify_db.common.config import (
     get_api_lock_path,
     get_lock_path,
@@ -274,7 +280,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "  spotify-db --run\n"
             "  spotify-db --run --tracker\n"
             "  spotify-db --stop --api\n"
-            "  spotify-db --status"
+            "  spotify-db --status\n"
+            "  spotify-db stats --period month\n"
+            "  spotify-db top artists -n 5 --from 2026-01-01\n"
+            "  spotify-db history -n 50\n"
+            "Optionen der Auswertungen: spotify-db stats|top|history --help"
         ),
     )
     parser.add_argument("--run", action="store_true", help="Startet die ausgewählten Komponenten")
@@ -294,6 +304,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="BEFEHL",
         help="Speichert einen Default-Befehl (z.B. --set-default --run --tracker --api)",
     )
+    # Auswertungen als Unterbefehle statt weiterer Flags: sie brauchen eigene Optionen
+    # (Zeitraum, -n, --json). Die Prozess-Flags oben bleiben, damit bestehende Aufrufe
+    # und gespeicherte Defaults weiter funktionieren.
+    subparsers = parser.add_subparsers(dest="command", title="Auswertungen", metavar="BEFEHL")
+    stats_cli.add_subcommands(subparsers)
     return parser
 
 
@@ -304,6 +319,12 @@ def _execute(args, parser: argparse.ArgumentParser):
             parser.error("--set-default braucht einen Befehl, z.B. --set-default --run")
         if set_config_value("default", default):
             print(f"Default gesetzt: spotify-db  →  spotify-db {default}")
+        return
+
+    if args.command:
+        if any([args.run, args.stop, args.status, args.backup, args.tracker, args.api, args.web]):
+            parser.error(f"'{args.command}' lässt sich nicht mit Prozess-Flags kombinieren")
+        stats_cli.run(args)
         return
 
     # Ohne Ziel-Flag betreffen --run/--stop alle Komponenten.
@@ -337,6 +358,7 @@ def main():
             args.status,
             args.backup,
             args.set_default is not None,
+            args.command,
             args.tracker,
             args.api,
             args.web,

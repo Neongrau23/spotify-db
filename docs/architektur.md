@@ -62,19 +62,21 @@ src-Layout unter `src/spotify_db/`, nach Domänen geschnitten:
 | `db/` | Persistenz, kein HTTP — Connection, DDL, Queries, api_keys, Backup |
 | `spotify/` | Spotify-Domäne, kein HTTP — Auth, Client, Collector, Playback, Tracker-Loop |
 | `api/` | Liefer-Schicht: FastAPI-App, Gateway (Auth + CORS), Keys-CLI, dünne Router |
+| `cli/` | Auswertungs-Befehle der CLI (`stats`, `top`, `history`), liest über `db/queries.py` |
 | `common/` | geteilte Helfer: Config, `status.json`-Vertrag, Terminal-Anzeige, Timer |
 | `web/` | statischer Web-Server (reine Standardbibliothek) |
 
-Abhängigkeitsrichtung: `api` und `spotify/tracker` rufen nach unten in `db/` und `common/`;
-`db/` und `common/` importieren nie nach oben. Alle `__init__.py` sind leere Paket-Marker —
+Abhängigkeitsrichtung: `api`, `cli` und `spotify/tracker` rufen nach unten in `db/` und
+`common/`; `db/` und `common/` importieren nie nach oben. Alle `__init__.py` sind leere Paket-Marker —
 bewusst ohne Importe, damit z. B. die Keys-CLI nicht das FastAPI-Setup mitlädt.
 
 ## Prozessmanager `main.py`
 
 `src/spotify_db/main.py` ist **ausschließlich Prozessmanager** — er enthält keinerlei
-Tracking- oder API-Logik. Jedes `--run`-Ziel wird als losgelöster Subprozess gestartet
-(`start_new_session=True` unter POSIX, `CREATE_NO_WINDOW` unter Windows), danach beendet
-sich `main.py` sofort. Er **überwacht die Kinder nicht** (kein Supervisor, kein Neustart).
+Tracking- oder API-Logik; die [Auswertungs-Befehle](#auswertungen-clistatspy) registriert er
+nur als Unterbefehle und reicht sie an `cli/stats.py` weiter. Jedes `--run`-Ziel wird als
+losgelöster Subprozess gestartet (`start_new_session=True` unter POSIX, `CREATE_NO_WINDOW`
+unter Windows), danach beendet sich `main.py` sofort. Er **überwacht die Kinder nicht** (kein Supervisor, kein Neustart).
 
 ### CLI-Befehle
 
@@ -88,9 +90,15 @@ spotify-db --status                        # PID/Liveness aller drei + aktueller
 spotify-db --backup                        # lokalen Backup-Zyklus sofort ausführen
 spotify-db --set-default --run --tracker --api --web
 spotify-db                                 # führt den gespeicherten Default aus
+
+spotify-db stats [--period …]              # Statistik (Hörzeit, Wiedergaben, Tracks …)
+spotify-db top [tracks|plays|artists|genres] [-n 10] [--period …]
+spotify-db history [-n 20] [--period …]    # letzte Wiedergaben
 ```
 
 Ohne `--tracker`/`--api`/`--web` betreffen `--run` und `--stop` immer **alle drei** Komponenten.
+Die Auswertungs-Befehle lassen sich nicht mit diesen Flags kombinieren, wohl aber als Default
+speichern (`spotify-db --set-default stats --period today`).
 
 ### Interna
 
@@ -123,6 +131,37 @@ Ohne `--tracker`/`--api`/`--web` betreffen `--run` und `--stop` immer **alle dre
   Achtung: bereits `spotify-db --tracker` (ohne Aktion) zählt als „Aktion angegeben" und
   zeigt nur die Hilfe — der Default greift wirklich nur bei **null** Argumenten.
 
+### Auswertungen (`cli/stats.py`)
+
+`stats`, `top` und `history` lesen `spotify.db` direkt — die API muss nicht laufen, ein API-Key
+ist nicht nötig; WAL erlaubt das Lesen parallel zum laufenden Tracker. Alle drei Befehle
+nehmen dieselben Optionen:
+
+| Option | Wirkung |
+| --- | --- |
+| `--period today\|week\|month\|year\|all` | Kalender-Zeitraum (Woche ab Montag); `all` bzw. ohne Angabe = gesamt |
+| `--from DATUM` / `--to DATUM` | eigener Zeitraum, beide Tage inklusiv; `JJJJ-MM-TT` oder `TT.MM.JJJJ`; schließt `--period` aus |
+| `-n N` | Anzahl Einträge (`top`: 10, `history`: 20) |
+| `--json` | Rohdaten statt Tabelle — Shapes wie die API (`/stats`, `/top…`, `/history`) |
+
+- **Gesamt** (ohne Zeitraum) rufen die Befehle **dieselben Queries wie die API-Endpunkte**
+  (`/stats`, `/top10/listen`, `/top/plays`, `/top/artists`, `/top10/genres`, `/history`) —
+  CLI und API zeigen also dieselben Zahlen. Die Datumsangaben von `stats` sind daher wie in
+  `/stats` UTC-Tage.
+- **Mit Zeitraum** wird `history` ausgewertet, denn `tracks.total_listen_ms` ist über die
+  gesamte Zeit kumuliert; nur `history` hält fest, *wann* gehört wurde. Hörzeit zählt dabei
+  zum Startzeitpunkt der Session (`played_at`); Genres kommen per Track-ID aus `tracks`.
+- **Zeiträume gelten in lokaler Zeit** (Zeitzone des Systems, also `TZ` bzw.
+  `/etc/localtime`). Die DB speichert UTC; die CLI rechnet die Tagesgrenzen vorher um, sonst
+  endete „heute" in Deutschland um 1 bzw. 2 Uhr nachts.
+- Eine **Wiedergabe** ist eine `history`-Zeile (Session) — inklusive Sessions ohne Hörzeit,
+  genau wie in `/stats` und `/top/plays`. Was das für die Zahlen bedeutet, steht unter
+  [Bekannte Eigenheiten](entwicklung.md#bekannte-eigenheiten--fallstricke) (Punkte 1 und 6).
+- Fehlt `spotify.db`, bricht die CLI mit Hinweis ab, statt eine leere DB anzulegen. Im
+  Terminal werden lange Track-Namen auf die Fensterbreite gekürzt (schmale Displays), beim
+  Umleiten in Datei/Pipe nicht. `history` listet die neueste Wiedergabe unten, direkt über dem
+  Prompt.
+
 ## Laufzeitdateien & Filesystem-IPC (`data/`)
 
 Alle Pfade laufen über die Getter in `src/spotify_db/common/config.py` — **niemals
@@ -132,7 +171,7 @@ hartkodieren**. Default-Lage ist `data/`, die Datenbanken und Backups liegen in
 | Datei | Schreiber | Leser | Zweck |
 | --- | --- | --- | --- |
 | `tracker.lock` / `api.lock` / `web.lock` | Tracker, API bzw. Web-Server (eigene PID) | `main.py`, der jeweilige Prozess selbst | „läuft"-Erkennung: Existenz + `os.kill(pid, 0)`. Jeder Prozess verweigert eine zweite Instanz seiner selbst |
-| `spotify.db` (+ `-wal`, `-shm`) | Tracker (+ `initialize_db` der API) | API | SQLite im WAL-Modus; Default `data/database/spotify.db` |
+| `spotify.db` (+ `-wal`, `-shm`) | Tracker (+ `initialize_db` der API) | API, Auswertungs-CLI | SQLite im WAL-Modus; Default `data/database/spotify.db` |
 | `local.db` | Keys-CLI | API (Gateway) | gerätespezifisch, nur `api_keys`, **nicht** in Backups |
 | `songs.db` | extern | API (`/songs*`, read-only) | Enrichment-DB, wird von spotify-db nie angelegt |
 | `status.json` | Tracker (pro Poll + sekündlich, via `common/status.py`) | API (`/live`), `spotify-db --status`, `playback.toggle()` | **Single source of truth** für den Live-Status; `/live` fragt Spotify nie selbst |

@@ -18,6 +18,7 @@ spotify-db --run [--tracker|--api|--web]    # Prozesse losgelöst starten (ohne 
 spotify-db --stop [--tracker|--api|--web]
 spotify-db --status                         # PID-Status + aktueller Track
 spotify-db --backup                         # Backup-Zyklus sofort ausführen
+spotify-db stats|top|history [--period today|week|month|year] [--json]   # Auswertungen
 
 python -m spotify_db.spotify.tracker        # Tracker im Vordergrund (Debugging, loggt dann auch auf stdout)
 python -m spotify_db.api.app                # API im Vordergrund (0.0.0.0:15001, Swagger unter /docs)
@@ -40,7 +41,9 @@ versioniert und plattformübergreifend — nach Änderungen an den Abhängigkeit
 optionaler statischer Web-Server (`web/server.py`, reine Standardbibliothek). `main.py` ist nur
 Prozessmanager: startet sie als losgelöste Subprozesse und beendet sich; kein Supervisor, kein
 Neustart. Beim Tracker-Stop wird bis zu 60 s gewartet, damit das finale Backup im
-`finally`-Block durchläuft.
+`finally`-Block durchläuft. Die Auswertungs-Befehle (`stats`/`top`/`history`) registriert er nur;
+ihre Logik liegt in `cli/stats.py`, die Queries in `db/queries.py` — gesamt dieselben wie die API,
+mit Zeitraum aus `history` (Details: `docs/architektur.md`).
 
 **Kommunikation ausschließlich über das Dateisystem** (`data/`) — kein Socket, kein RPC:
 
@@ -97,9 +100,9 @@ Alle Pfade laufen über die Getter in `common/config.py` (`get_db_path()`, `get_
 - ⚠️ **Pfade und Antwort-Shapes sind ein stabiler Vertrag.** Routen-Änderungen immer in
   `docs/api.md` nachziehen.
 
-**Abhängigkeitsrichtung:** `api/` und `spotify/` rufen nach unten in `db/` und `common/`; diese
-importieren nie nach oben. Alle `__init__.py` bleiben leer (damit z. B. die Keys-CLI nicht
-FastAPI mitlädt).
+**Abhängigkeitsrichtung:** `api/`, `cli/` und `spotify/` rufen nach unten in `db/` und
+`common/`; diese importieren nie nach oben. Alle `__init__.py` bleiben leer (damit z. B. die
+Keys-CLI nicht FastAPI mitlädt).
 
 ## Konfiguration
 

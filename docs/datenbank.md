@@ -132,7 +132,7 @@ wird; spotify-db liest das Schema zur Laufzeit per `PRAGMA table_info` und setzt
 | --- | --- |
 | `save_track_to_db(track_data, is_new_play, listen_increment_ms)` | UPSERT in `tracks` (existiert ⇒ UPDATE inkl. `total_listen_ms += increment`, sonst INSERT). Increment wird auf `[0, 30000]` geklemmt. `is_new_play=True` ⇒ neue `history`-Zeile; sonst `total_listen_ms`-UPDATE auf die Zeile mit `MAX(id)` für diese `track_id`. Rückgabe `True` **nur** beim allerersten DB-Eintrag des Tracks |
 
-**Lesen** (`queries.py` — von API-Routen, Tracker und Collector genutzt):
+**Lesen** (`queries.py` — von API-Routen, Auswertungs-CLI, Tracker und Collector genutzt):
 
 | Funktion | Verhalten |
 | --- | --- |
@@ -142,6 +142,7 @@ wird; spotify-db liest das Schema zur Laufzeit per `PRAGMA table_info` und setzt
 | `list_tracks` / `get_track` / `list_history` | Queries der Lese-Endpoints (inkl. Spalten-Allow-List und Pagination) |
 | `top_tracks_by_listen` / `top_genres_by_listen` / `top_artists_by_listen` / `top_tracks_by_plays` | Top-N-Queries (Genres/Artists in Python aggregiert) |
 | `get_db_stats()` | Gesamt-Statistik (Shape des `/stats`-Endpoints) |
+| `get_period_stats` / `top_tracks_in_period` / `top_artists_in_period` / `top_genres_in_period` / `list_history_in_period` | Zeitraum-Varianten für die [Auswertungs-CLI](architektur.md#auswertungen-clistatspy): werten `history` im halboffenen UTC-Intervall `[start, end)` aus (`None` = offen), Shapes wie die Gesamt-Pendants |
 | `format_added_at` / `format_dd_hh_mm` / `format_hh_mm_ss` | Format-Helfer (`DD.MM.YYYY`, `TTd HHh MMm`, `HH:MM:SS`/`MM:SS`) |
 
 **Keys** (`keys.py` — Auth-Daten, via `transaction()`/`read_lock()`):

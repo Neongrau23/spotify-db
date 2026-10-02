@@ -71,7 +71,12 @@ Dokumentierter Ist-Zustand — teils bewusste Trade-offs, teils Kandidaten für 
    foreign_keys=ON` ist daher derzeit wirkungslos.
 6. **Pause/Resume erzeugt keine neue History-Zeile:** eine „Session" endet erst beim
    Track-*Wechsel*. Wer denselben Track nach Stunden erneut hört (ohne dass dazwischen ein
-   anderer lief), verlängert die alte History-Zeile statt eine neue zu beginnen.
+   anderer lief), verlängert die alte History-Zeile statt eine neue zu beginnen. Umgekehrt
+   beginnt nach einem Tracker-Neustart der laufende Track eine neue Zeile (der Tracker kennt
+   den vorherigen Track nicht mehr). Zeilen mit 0 ms entstehen, wenn ein Track nur in einem
+   einzigen Poll auftauchte (innerhalb weniger Sekunden übersprungen, oder beim Tracker-Start
+   pausiert und nicht fortgesetzt). Als „Wiedergaben" (`/stats`, `/top/plays`,
+   `spotify-db stats`) zählen alle diese Zeilen.
 7. **Genre-Cache friert Genres ein:** Genres werden nur beim ersten Auftauchen eines Tracks
    von Spotify geholt; spätere Genre-Änderungen bei Spotify erreichen die DB nie (Trade-off
    zugunsten gesparter API-Calls).

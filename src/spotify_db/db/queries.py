@@ -3,7 +3,8 @@
 Alle Funktionen sind reine Reads über `database.read_lock()` — Schreibzugriffe
 leben in `database.py`. Die API-Routen (`spotify_db.api.routes`) bleiben dünn und
 rufen ausschließlich hierher; die Antwort-Shapes der Endpoints werden also von
-diesen Funktionen bestimmt.
+diesen Funktionen bestimmt. Die Auswertungs-Befehle der CLI (`spotify_db.cli.stats`)
+nutzen dieselben Funktionen, damit CLI und API dieselben Zahlen zeigen.
 """
 
 from spotify_db.db.database import read_lock
@@ -67,6 +68,59 @@ def format_hh_mm_ss(total_ms: int) -> str:
     if hours > 0:
         return f"{hours:02}:{minutes:02}:{seconds:02}"
     return f"{minutes:02}:{seconds:02}"
+
+
+# SECTION: - Aggregations-Helfer -
+
+
+# DEF: Komma-Liste (artists/genres) aufsplitten
+def _split_names(raw, ignore=()) -> list[str]:
+    """Zerlegt einen komma-getrennten DB-String in bereinigte Einzelnamen.
+
+    Zentral, damit Gesamt- und Zeitraum-Auswertungen dieselben Regeln anwenden. Namen
+    mit Komma ("Tyler, The Creator") werden dabei zerlegt — bekannte Eigenheit, siehe
+    docs/entwicklung.md.
+
+    Args:
+        raw: Spaltenwert, z.B. "Daft Punk, The Weeknd"; leer/None ergibt [].
+        ignore: Namen, die wegfallen (z.B. der Genre-Platzhalter).
+
+    Returns:
+        list[str]: Die nicht-leeren, getrimmten Namen.
+    """
+    if not raw:
+        return []
+    names = (part.strip() for part in raw.split(","))
+    return [name for name in names if name and name not in ignore]
+
+
+# DEF: Hörzeit pro Einzelname aufsummieren (Top-Artists/-Genres)
+def _top_by_name(rows, column, key, n, ignore=()):
+    """Summiert `total_listen_ms` pro Einzelname einer Komma-Spalte und liefert die Top N.
+
+    Args:
+        rows: Zeilen mit `column` und `total_listen_ms`.
+        column: Name der Komma-Spalte ("artists" oder "genres").
+        key: Schlüssel des Namens im Ergebnis ("artist" oder "genre").
+        n: Anzahl der Einträge.
+        ignore: Namen, die nicht mitgezählt werden.
+
+    Returns:
+        list[dict]: `{key, total_listen_ms, total_listen_time}`, absteigend nach Hörzeit.
+    """
+    totals: dict[str, int] = {}
+    for row in rows:
+        listen_ms = row["total_listen_ms"] or 0
+        if listen_ms == 0:
+            continue
+        for name in _split_names(row[column], ignore):
+            totals[name] = totals.get(name, 0) + listen_ms
+
+    top = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:n]
+    return [
+        {key: name, "total_listen_ms": ms, "total_listen_time": format_hh_mm_ss(ms)}
+        for name, ms in top
+    ]
 
 
 # SECTION: - Hot-Path-Helfer (Live-Widget) -
@@ -233,22 +287,7 @@ def top_genres_by_listen(n):
         rows = conn.execute(
             "SELECT genres, total_listen_ms FROM tracks WHERE genres IS NOT NULL AND genres != ''"
         ).fetchall()
-
-    genre_stats: dict[str, int] = {}
-    for row in rows:
-        listen_ms = row["total_listen_ms"] or 0
-        if listen_ms == 0:
-            continue
-        for g in row["genres"].split(","):
-            g = g.strip()
-            if g and g != _GENRE_PLACEHOLDER:
-                genre_stats[g] = genre_stats.get(g, 0) + listen_ms
-
-    sorted_genres = sorted(genre_stats.items(), key=lambda x: x[1], reverse=True)[:n]
-    return [
-        {"genre": g, "total_listen_ms": ms, "total_listen_time": format_hh_mm_ss(ms)}
-        for g, ms in sorted_genres
-    ]
+    return _top_by_name(rows, "genres", "genre", n, ignore=(_GENRE_PLACEHOLDER,))
 
 
 # DEF: Top-N Artists nach Hörzeit
@@ -258,22 +297,7 @@ def top_artists_by_listen(n):
         rows = conn.execute(
             "SELECT artists, total_listen_ms FROM tracks WHERE artists IS NOT NULL AND artists != ''"
         ).fetchall()
-
-    artist_stats: dict[str, int] = {}
-    for row in rows:
-        listen_ms = row["total_listen_ms"] or 0
-        if listen_ms == 0:
-            continue
-        for a in row["artists"].split(","):
-            a = a.strip()
-            if a:
-                artist_stats[a] = artist_stats.get(a, 0) + listen_ms
-
-    sorted_artists = sorted(artist_stats.items(), key=lambda x: x[1], reverse=True)[:n]
-    return [
-        {"artist": a, "total_listen_ms": ms, "total_listen_time": format_hh_mm_ss(ms)}
-        for a, ms in sorted_artists
-    ]
+    return _top_by_name(rows, "artists", "artist", n)
 
 
 # DEF: Top-N Tracks nach Wiedergabe-Anzahl
@@ -319,14 +343,8 @@ def get_db_stats():
     unique_artists: set[str] = set()
     unique_genres: set[str] = set()
     for row in artist_genre_rows:
-        if row["artists"]:
-            unique_artists.update(a.strip() for a in row["artists"].split(",") if a.strip())
-        if row["genres"]:
-            unique_genres.update(
-                g.strip()
-                for g in row["genres"].split(",")
-                if g.strip() and g.strip() != _GENRE_PLACEHOLDER
-            )
+        unique_artists.update(_split_names(row["artists"]))
+        unique_genres.update(_split_names(row["genres"], ignore=(_GENRE_PLACEHOLDER,)))
 
     avg_listen_ms = (total_listen_ms // total_tracks) if total_tracks else 0
     return {
@@ -341,3 +359,201 @@ def get_db_stats():
         "first_seen": format_added_at(first_seen),
         "last_seen": format_added_at(last_seen),
     }
+
+
+# SECTION: - Zeitraum-Queries (CLI) -
+# Zeitraum-Auswertungen kommen aus `history`, nicht aus `tracks`: `tracks.total_listen_ms`
+# ist über die gesamte Zeit kumuliert, nur `history` hält fest, *wann* gehört wurde.
+# Die Grenzen sind fertige UTC-Zeitstempel ('YYYY-MM-DD HH:MM:SS') eines halboffenen
+# Intervalls [start, end); die Umrechnung aus lokaler Zeit macht der Aufrufer.
+
+# CONFIG: Sortierungen für top_tracks_in_period (Allow-List statt SQL aus Parametern)
+_PERIOD_TRACK_ORDER = {
+    "listen": "total_listen_ms DESC",
+    "plays": "play_count DESC, total_listen_ms DESC",
+}
+
+
+# DEF: WHERE-Bedingung für einen Zeitraum
+def _range_condition(start, end, column="played_at"):
+    """Baut die SQL-Bedingung + Parameter für das Intervall [start, end) auf `column`.
+
+    Verglichen wird direkt auf der Spalte (ohne Funktionsaufruf), damit SQLite den
+    Index auf `history.played_at` nutzen kann. `column` stammt nur aus diesem Modul.
+
+    Args:
+        start: Untergrenze (inklusiv) als UTC-Zeitstempel, None = offen.
+        end: Obergrenze (exklusiv) als UTC-Zeitstempel, None = offen.
+        column: Zu vergleichende Zeitstempel-Spalte.
+
+    Returns:
+        tuple[str, list]: (Bedingung für WHERE, Parameter).
+    """
+    conditions: list[str] = []
+    params: list = []
+    if start:
+        conditions.append(f"{column} >= ?")
+        params.append(start)
+    if end:
+        conditions.append(f"{column} < ?")
+        params.append(end)
+    return (" AND ".join(conditions) or "1"), params
+
+
+# DEF: Statistik für einen Zeitraum
+def get_period_stats(start, end):
+    """Liefert die Statistik eines Zeitraums, analog zu `get_db_stats()`.
+
+    Eine „Wiedergabe" ist eine `history`-Zeile (Session) — gezählt wie in `/stats`.
+
+    Args:
+        start: Untergrenze (inklusiv) als UTC-Zeitstempel, None = offen.
+        end: Obergrenze (exklusiv) als UTC-Zeitstempel, None = offen.
+
+    Returns:
+        dict: Hörzeit, Wiedergaben, verschiedene Tracks/Artists/Alben/Genres, im Zeitraum
+        neu hinzugekommene Tracks sowie erste/letzte Wiedergabe (UTC, roh aus der DB).
+    """
+    where, params = _range_condition(start, end)
+    added_where, added_params = _range_condition(start, end, column="added_at")
+    with read_lock() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(total_listen_ms), 0) AS listen_ms,
+                   COUNT(*) AS plays,
+                   COUNT(DISTINCT track_id) AS tracks,
+                   COUNT(DISTINCT NULLIF(album, '')) AS albums,
+                   MIN(played_at) AS first_played_at,
+                   MAX(played_at) AS last_played_at
+            FROM history WHERE {where}
+            """,
+            params,
+        ).fetchone()
+        artist_rows = conn.execute(
+            f"SELECT DISTINCT artists FROM history WHERE {where}", params
+        ).fetchall()
+        # Genres stehen nur in `tracks` — daher über die im Zeitraum gehörten Track-IDs.
+        genre_rows = conn.execute(
+            f"SELECT genres FROM tracks WHERE track_id IN "
+            f"(SELECT track_id FROM history WHERE {where})",
+            params,
+        ).fetchall()
+        new_tracks = conn.execute(
+            f"SELECT COUNT(*) FROM tracks WHERE {added_where}", added_params
+        ).fetchone()[0]
+
+    unique_artists: set[str] = set()
+    for artist_row in artist_rows:
+        unique_artists.update(_split_names(artist_row["artists"]))
+    unique_genres: set[str] = set()
+    for genre_row in genre_rows:
+        unique_genres.update(_split_names(genre_row["genres"], ignore=(_GENRE_PLACEHOLDER,)))
+
+    listen_ms = row["listen_ms"]
+    return {
+        "total_listen_ms": listen_ms,
+        "total_listen_time": format_dd_hh_mm(listen_ms),
+        "total_plays": row["plays"],
+        "unique_tracks": row["tracks"],
+        "new_tracks": new_tracks,
+        "unique_artists": len(unique_artists),
+        "unique_albums": row["albums"],
+        "unique_genres": len(unique_genres),
+        "first_played_at": row["first_played_at"],
+        "last_played_at": row["last_played_at"],
+    }
+
+
+# DEF: Top-N Tracks eines Zeitraums (nach Hörzeit oder Wiedergaben)
+def top_tracks_in_period(start, end, n, by="listen"):
+    """Liefert die Top-N-Tracks eines Zeitraums; Shape wie `top_tracks_by_plays()`.
+
+    Args:
+        start: Untergrenze (inklusiv) als UTC-Zeitstempel, None = offen.
+        end: Obergrenze (exklusiv) als UTC-Zeitstempel, None = offen.
+        n: Anzahl der Einträge.
+        by: "listen" (Hörzeit) oder "plays" (Anzahl Wiedergaben).
+
+    Returns:
+        list[dict]: Tracks mit `play_count` und `total_listen_ms` im Zeitraum.
+
+    Raises:
+        ValueError: Bei unbekannter Sortierung.
+    """
+    order = _PERIOD_TRACK_ORDER.get(by)
+    if order is None:
+        raise ValueError(f"Unbekannte Sortierung: {by}")
+    # Ohne Hörzeit ist ein Track kein „Top-Track nach Hörzeit" — analog zu den Artists/Genres.
+    having = "HAVING total_listen_ms > 0" if by == "listen" else ""
+    where, params = _range_condition(start, end, column="h.played_at")
+    with read_lock() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT h.track_id, h.track_name, h.artists, h.album,
+                   COUNT(*) AS play_count,
+                   SUM(h.total_listen_ms) AS total_listen_ms,
+                   t.album_cover_url, t.spotify_url
+            FROM history h
+            LEFT JOIN tracks t ON h.track_id = t.track_id
+            WHERE {where}
+            GROUP BY h.track_id
+            {having}
+            ORDER BY {order}
+            LIMIT ?
+            """,
+            [*params, n],
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# DEF: Top-N Artists eines Zeitraums
+def top_artists_in_period(start, end, n):
+    """Aggregiert die Hörzeit pro Künstler im Zeitraum; Shape wie `top_artists_by_listen()`."""
+    where, params = _range_condition(start, end)
+    with read_lock() as conn:
+        rows = conn.execute(
+            f"SELECT artists, total_listen_ms FROM history "
+            f"WHERE {where} AND artists IS NOT NULL AND artists != ''",
+            params,
+        ).fetchall()
+    return _top_by_name(rows, "artists", "artist", n)
+
+
+# DEF: Top-N Genres eines Zeitraums
+def top_genres_in_period(start, end, n):
+    """Aggregiert die Hörzeit pro Genre im Zeitraum; Shape wie `top_genres_by_listen()`."""
+    where, params = _range_condition(start, end, column="h.played_at")
+    with read_lock() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT t.genres, SUM(h.total_listen_ms) AS total_listen_ms
+            FROM history h
+            JOIN tracks t ON t.track_id = h.track_id
+            WHERE {where} AND t.genres IS NOT NULL AND t.genres != ''
+            GROUP BY h.track_id
+            """,
+            params,
+        ).fetchall()
+    return _top_by_name(rows, "genres", "genre", n, ignore=(_GENRE_PLACEHOLDER,))
+
+
+# DEF: History eines Zeitraums auflisten
+def list_history_in_period(start, end, limit):
+    """Liefert die neuesten Hör-Sessions eines Zeitraums; Shape wie `list_history()`.
+
+    Args:
+        start: Untergrenze (inklusiv) als UTC-Zeitstempel, None = offen.
+        end: Obergrenze (exklusiv) als UTC-Zeitstempel, None = offen.
+        limit: Maximale Anzahl Einträge.
+
+    Returns:
+        tuple[list[dict], int]: (Einträge, absteigend nach Zeitpunkt; Gesamtanzahl Treffer).
+    """
+    where, params = _range_condition(start, end)
+    with read_lock() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM history WHERE {where}", params).fetchone()[0]
+        rows = conn.execute(
+            f"SELECT * FROM history WHERE {where} ORDER BY played_at DESC LIMIT ?",
+            [*params, limit],
+        ).fetchall()
+    return [dict(row) for row in rows], total
