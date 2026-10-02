@@ -87,6 +87,10 @@ python -m spotify_db.api.keys create --name handy
 spotify-db --run          # Tracker, API und Web-Server im Hintergrund starten
 spotify-db --status       # Prozess-Status und aktueller Track
 spotify-db --stop         # alles stoppen (wartet auf das finale Backup)
+
+spotify-db stats --period month   # Statistik dieses Monats
+spotify-db top artists -n 5       # Top 5 Artists nach Hörzeit
+spotify-db history                # letzte 20 Wiedergaben
 ```
 
 Mit `--tracker`, `--api` oder `--web` lassen sich die Prozesse einzeln starten und stoppen.
